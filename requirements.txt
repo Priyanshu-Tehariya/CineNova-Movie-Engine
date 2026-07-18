@@ -1,0 +1,12 @@
+aiogram==3.7.0
+pydantic-settings==2.3.4
+python-dotenv==1.0.1
+sqlalchemy==2.0.31
+asyncpg==0.29.0
+alembic==1.13.2
+redis==5.0.7
+apscheduler==3.10.4
+structlog==24.2.0
+colorama==0.4.6
+cryptography==42.0.8
+python-slugify==8.0.4
