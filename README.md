@@ -1,6 +1,6 @@
 <div align="center">
 
-<!-- Yahan aapka premium visual banner display hoga -->
+<!-- Premium Visual Production Banner -->
 <img src="banner.png" alt="CineNova Banner" width="100%">
 
 # 🎬 CineNova Movie Bot
@@ -11,6 +11,7 @@
 [![SQLAlchemy 2.0](https://img.shields.io/badge/Database-SQLAlchemy_2.0-red?style=for-the-badge&logo=sqlite)](https://www.sqlalchemy.org/)
 [![Redis Cached](https://img.shields.io/badge/Cache-Redis_Client-darkred?style=for-the-badge&logo=redis)](https://redis.io/)
 [![License MIT](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)](https://opensource.org/licenses/MIT)
+[![Live Demo](https://img.shields.io/badge/Live_Demo-Open_Bot-26A5E4?style=for-the-badge&logo=telegram)](https://t.me/TheCineNovaBot)
 
 </div>
 
