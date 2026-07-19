@@ -121,7 +121,7 @@ async def cb_admin_cancel(callback: CallbackQuery) -> None:
 @router.callback_query(F.data.startswith("req:"))
 async def cb_admin_request_action(callback: CallbackQuery) -> None:
     """Intercepts custom asset request tickers and updates transactional verification statuses."""
-    _, action, target_user_id, movie_name = callback.data.split(":")
+    _, action, target_user_id, movie_name = callback.data.split(":", 3)
     target_user_id = int(target_user_id)
     
     if callback.from_user.id not in settings.ADMIN_IDS:
