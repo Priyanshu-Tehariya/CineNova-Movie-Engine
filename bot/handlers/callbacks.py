@@ -60,7 +60,8 @@ async def cb_get_file(callback: CallbackQuery) -> None:
     )
 
 
-@router.callback_query(F.data.startswith("save_remind:"))
+# 🔥 FIXED: Matched callback prefix with keyboards.py (`save_file:` and `save_remind:`)
+@router.callback_query(F.data.startswith("save_file:") | F.data.startswith("save_remind:"))
 async def cb_save_remind(callback: CallbackQuery) -> None:
     """Dispatches actionable storage routing guidelines to the current interactive context session."""
     await callback.answer(

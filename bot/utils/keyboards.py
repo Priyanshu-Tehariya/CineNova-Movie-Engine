@@ -65,7 +65,7 @@ def admin_panel_keyboard() -> InlineKeyboardMarkup:
     builder.button(text="📁 Index Files", callback_data="admin:index_mode")
     builder.button(text="🚫 Ban User", callback_data="admin:ban_user")
     builder.button(text="✅ Unban User", callback_data="admin:unban_user")
-    builder.button(text="📢 Broadcast", callback_data="admin:broadcast")
+    builder.button(text="📢 Broadcast", callback_data="admin_broadcast")
     builder.button(text="🔄 Clear Search Cache", callback_data="admin:clear_cache")
     builder.adjust(2)
     return builder.as_markup()
