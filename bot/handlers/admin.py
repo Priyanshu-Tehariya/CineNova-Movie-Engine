@@ -247,6 +247,7 @@ async def process_broadcast_button(message: Message, state: FSMContext) -> None:
         await message.answer("❌ Process Cancelled.")
         return
 
+    # Store message reference and state data safely
     await state.update_data(broadcast_message_id=message.message_id, broadcast_chat_id=message.chat.id)
     
     confirm_keyboard = InlineKeyboardMarkup(
@@ -267,6 +268,7 @@ async def process_broadcast_button(message: Message, state: FSMContext) -> None:
         parse_mode="HTML"
     )
 
+
 @router.callback_query(F.data == "confirm_broadcast")
 async def cb_confirm_broadcast(callback: CallbackQuery, state: FSMContext, bot: Bot) -> None:
     """Executes asynchronously managed data copying distribution to non-restricted accounts."""
@@ -274,14 +276,17 @@ async def cb_confirm_broadcast(callback: CallbackQuery, state: FSMContext, bot: 
     msg_id = data.get("broadcast_message_id")
     from_chat_id = data.get("broadcast_chat_id")
     
+    # State clear pehle kar do taaki repeat state loop break ho jaye
+    await state.clear()
+
     if not msg_id or not from_chat_id:
         await callback.answer("❌ Context state missing, please restart the transmission sequence.", show_alert=True)
-        await state.clear()
         return
 
     await callback.answer("🚀 Broadcasting started...")
-    await state.clear()
     
+    # Existing keyboard remove kardo taaki repeat click na ho sake
+    await callback.message.edit_reply_markup(reply_markup=None)
     status_msg = await callback.message.answer("🔄 <i>Broadcasting message payload... Please wait.</i>", parse_mode="HTML")
 
     async with get_session() as session:
