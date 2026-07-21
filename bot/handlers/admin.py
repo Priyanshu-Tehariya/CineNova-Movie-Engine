@@ -219,8 +219,73 @@ async def process_unban_button(message: Message, state: FSMContext, bot: Bot) ->
     await state.clear()
 
 
-# ── 6. BROADCAST MODULE WITH EXPLICIT STATE & CALLBACK BINDING ──
-@router.callback_query(lambda c: c.data and "broadcast" in c.data.lower())
+# ── 6. BROADCAST MODULE WITH HIGH PRIORITY ROUTING ──
+# ⚠️ PRIORITY FIX: Placed confirm/cancel FIRST so they don't get intercepted by generic broadcast matchers!
+@router.callback_query(F.data == "confirm_broadcast")
+async def cb_confirm_broadcast(callback: CallbackQuery, state: FSMContext, bot: Bot) -> None:
+    """Executes asynchronously managed data copying distribution to non-restricted accounts."""
+    data = await state.get_data()
+    msg_id = data.get("broadcast_message_id")
+    from_chat_id = data.get("broadcast_chat_id")
+    
+    await state.clear()
+
+    if not msg_id or not from_chat_id:
+        await callback.answer("❌ Context state missing, please restart /broadcast.", show_alert=True)
+        return
+
+    await callback.answer("🚀 Broadcasting started...")
+    
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+
+    status_msg = await callback.message.answer("🔄 <i>Broadcasting message payload... Please wait.</i>", parse_mode="HTML")
+
+    async with get_session() as session:
+        result = await session.execute(text("SELECT id FROM users WHERE is_banned = false"))
+        user_ids = [row[0] for row in result.fetchall()]
+
+    if not user_ids:
+        await status_msg.edit_text("❌ No active non-restricted users found in the repository.")
+        return
+
+    success, fail = 0, 0
+    for u_id in user_ids:
+        try:
+            await bot.copy_message(chat_id=int(u_id), from_chat_id=int(from_chat_id), message_id=int(msg_id))
+            success += 1
+            await asyncio.sleep(0.05)
+        except TelegramRetryAfter as e:
+            await asyncio.sleep(e.retry_after)
+            try:
+                await bot.copy_message(chat_id=int(u_id), from_chat_id=int(from_chat_id), message_id=int(msg_id))
+                success += 1
+            except Exception:
+                fail += 1
+        except Exception:
+            fail += 1
+
+    await status_msg.edit_text(
+        f"📢 <b>Broadcast Completed Successfully!</b>\n\n"
+        f"✅ Delivered to: <b>{success} users</b>\n"
+        f"❌ Failed (Blocked): <b>{fail} users</b>",
+        parse_mode="HTML"
+    )
+
+@router.callback_query(F.data == "cancel_broadcast")
+async def cb_cancel_broadcast(callback: CallbackQuery, state: FSMContext) -> None:
+    """Terminates active broadcast transaction allocations cleanly."""
+    await callback.answer("Cancelled")
+    await state.clear()
+    try:
+        await callback.message.edit_text("❌ The transmission broadcast process has been cancelled.")
+    except Exception:
+        await callback.message.answer("❌ The transmission broadcast process has been cancelled.")
+
+
+@router.callback_query(lambda c: c.data and "broadcast" in c.data.lower() and c.data not in ["confirm_broadcast", "cancel_broadcast"])
 @router.message(Command("broadcast"))
 async def cb_broadcast_start(event: CallbackQuery | Message, state: FSMContext) -> None:
     """Initializes the multi-user system announcement interface pipeline."""
@@ -268,77 +333,7 @@ async def process_broadcast_button(message: Message, state: FSMContext) -> None:
         reply_markup=confirm_keyboard,
         parse_mode="HTML"
     )
-    # Transition to confirmation state
     await state.set_state(BroadcastButtonState.waiting_for_confirm)
-
-
-# Handles confirm button BOTH when state is waiting_for_confirm AND as a fallback
-@router.callback_query(BroadcastButtonState.waiting_for_confirm, F.data == "confirm_broadcast")
-@router.callback_query(F.data == "confirm_broadcast")
-async def cb_confirm_broadcast(callback: CallbackQuery, state: FSMContext, bot: Bot) -> None:
-    """Executes asynchronously managed data copying distribution to non-restricted accounts."""
-    data = await state.get_data()
-    msg_id = data.get("broadcast_message_id")
-    from_chat_id = data.get("broadcast_chat_id")
-    
-    # Clear FSM state immediately to avoid repeated processing
-    await state.clear()
-
-    if not msg_id or not from_chat_id:
-        await callback.answer("❌ Context state missing, please restart /broadcast.", show_alert=True)
-        return
-
-    await callback.answer("🚀 Broadcasting started...")
-    
-    # Remove inline confirmation buttons upon execution
-    try:
-        await callback.message.edit_reply_markup(reply_markup=None)
-    except Exception:
-        pass
-
-    status_msg = await callback.message.answer("🔄 <i>Broadcasting message payload... Please wait.</i>", parse_mode="HTML")
-
-    async with get_session() as session:
-        result = await session.execute(text("SELECT id FROM users WHERE is_banned = false"))
-        user_ids = [row[0] for row in result.fetchall()]
-
-    if not user_ids:
-        await status_msg.edit_text("❌ No active non-restricted users found in the repository.")
-        return
-
-    success, fail = 0, 0
-    for u_id in user_ids:
-        try:
-            await bot.copy_message(chat_id=int(u_id), from_chat_id=int(from_chat_id), message_id=int(msg_id))
-            success += 1
-            await asyncio.sleep(0.05)
-        except TelegramRetryAfter as e:
-            await asyncio.sleep(e.retry_after)
-            try:
-                await bot.copy_message(chat_id=int(u_id), from_chat_id=int(from_chat_id), message_id=int(msg_id))
-                success += 1
-            except Exception:
-                fail += 1
-        except Exception:
-            fail += 1
-
-    await status_msg.edit_text(
-        f"📢 <b>Broadcast Completed Successfully!</b>\n\n"
-        f"✅ Delivered to: <b>{success} users</b>\n"
-        f"❌ Failed (Blocked): <b>{fail} users</b>",
-        parse_mode="HTML"
-    )
-
-@router.callback_query(BroadcastButtonState.waiting_for_confirm, F.data == "cancel_broadcast")
-@router.callback_query(F.data == "cancel_broadcast")
-async def cb_cancel_broadcast(callback: CallbackQuery, state: FSMContext) -> None:
-    """Terminates active broadcast transaction allocations cleanly."""
-    await callback.answer("Cancelled")
-    await state.clear()
-    try:
-        await callback.message.edit_text("❌ The transmission broadcast process has been cancelled.")
-    except Exception:
-        await callback.message.answer("❌ The transmission broadcast process has been cancelled.")
 
 
 # ── 7. MANUAL ADD FILE LINK (FIXED MULTI-ROUTING WITH CALLBACK) ──
