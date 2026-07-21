@@ -219,8 +219,8 @@ async def process_unban_button(message: Message, state: FSMContext, bot: Bot) ->
     await state.clear()
 
 
-# ── 6. BROADCAST MODULE WITH HIGH PRIORITY ROUTING ──
-# ⚠️ PRIORITY FIX: Placed confirm/cancel FIRST so they don't get intercepted by generic broadcast matchers!
+# ── 6. BROADCAST MODULE (STRICT STATE & CALLBACK HANDLERS) ──
+@router.callback_query(BroadcastButtonState.waiting_for_confirm, F.data == "confirm_broadcast")
 @router.callback_query(F.data == "confirm_broadcast")
 async def cb_confirm_broadcast(callback: CallbackQuery, state: FSMContext, bot: Bot) -> None:
     """Executes asynchronously managed data copying distribution to non-restricted accounts."""
@@ -274,6 +274,8 @@ async def cb_confirm_broadcast(callback: CallbackQuery, state: FSMContext, bot: 
         parse_mode="HTML"
     )
 
+
+@router.callback_query(BroadcastButtonState.waiting_for_confirm, F.data == "cancel_broadcast")
 @router.callback_query(F.data == "cancel_broadcast")
 async def cb_cancel_broadcast(callback: CallbackQuery, state: FSMContext) -> None:
     """Terminates active broadcast transaction allocations cleanly."""
@@ -305,6 +307,7 @@ async def cb_broadcast_start(event: CallbackQuery | Message, state: FSMContext) 
     )
     await state.set_state(BroadcastButtonState.waiting_for_message)
 
+
 @router.message(BroadcastButtonState.waiting_for_message)
 async def process_broadcast_button(message: Message, state: FSMContext) -> None:
     """Generates an operational staging preview block for confirmation verification."""
@@ -313,7 +316,7 @@ async def process_broadcast_button(message: Message, state: FSMContext) -> None:
         await message.answer("❌ Process Cancelled.")
         return
 
-    # Safely store message details in FSM memory
+    # Store message reference and state data safely
     await state.update_data(broadcast_message_id=message.message_id, broadcast_chat_id=message.chat.id)
     
     confirm_keyboard = InlineKeyboardMarkup(
