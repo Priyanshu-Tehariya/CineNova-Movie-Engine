@@ -17,6 +17,7 @@ from bot.handlers import admin, callbacks, search, start
 from bot.middlewares.force_join import ForceJoinMiddleware
 from bot.middlewares.logging_mw import StructuredLoggingMiddleware
 from bot.middlewares.throttling import ThrottlingMiddleware
+from bot.middlewares.db_middleware import EnsureUserExistsMiddleware  # 👈 Added Middleware Import
 
 
 def configure_logging() -> None:
@@ -163,7 +164,9 @@ async def main() -> None:
     dp.startup.register(on_startup)
     dp.shutdown.register(on_shutdown)
 
+    # Middlewares Pipeline
     dp.update.outer_middleware(StructuredLoggingMiddleware())
+    dp.update.outer_middleware(EnsureUserExistsMiddleware())  # 👈 Added User Auto-Registration Middleware
     
     dp.message.middleware(ThrottlingMiddleware(limit=0.8, max_alerts=3))
 
