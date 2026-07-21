@@ -60,7 +60,6 @@ async def cb_get_file(callback: CallbackQuery) -> None:
     )
 
 
-# 🔥 FIXED: Matched callback prefix with keyboards.py (`save_file:` and `save_remind:`)
 @router.callback_query(F.data.startswith("save_file:") | F.data.startswith("save_remind:"))
 async def cb_save_remind(callback: CallbackQuery) -> None:
     """Dispatches actionable storage routing guidelines to the current interactive context session."""
@@ -126,14 +125,13 @@ async def cb_admin_request_action(callback: CallbackQuery) -> None:
     target_user_id = int(target_user_id)
     
     if callback.from_user.id not in settings.ADMIN_IDS:
-        await callback.answer("⛔ Access Denied / Anumati Nahi Hai.", show_alert=True)
+        await callback.answer("⛔ Access Denied.", show_alert=True)
         return
 
     lines = callback.message.text.split("\n")
     user_line = lines[2] if len(lines) > 2 else f"👤 User: {target_user_id}"
     movie_line = lines[3] if len(lines) > 3 else f"🎬 Movie: Requested"
 
-    # --- 1. ACTION: UPLOADED ---
     if action == "done":
         new_text = (
             "🚨 <b>MOVIE REQUEST PROCESSED</b>\n"
@@ -160,7 +158,6 @@ async def cb_admin_request_action(callback: CallbackQuery) -> None:
         except Exception:
             pass
 
-    # --- 2. ACTION: COMING SOON ---
     elif action == "soon":
         new_text = (
             "🚨 <b>MOVIE REQUEST PROCESSED</b>\n"
@@ -187,7 +184,6 @@ async def cb_admin_request_action(callback: CallbackQuery) -> None:
         except Exception:
             pass
 
-    # --- 3. ACTION: REJECT ---
     elif action == "skip":
         new_text = (
             "🚨 <b>MOVIE REQUEST PROCESSED</b>\n"

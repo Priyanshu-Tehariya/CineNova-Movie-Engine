@@ -7,9 +7,8 @@ from aiogram import F, Router, Bot
 from aiogram.filters import Command, CommandObject
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import Message, CallbackQuery
 from aiogram.exceptions import TelegramRetryAfter
-from sqlalchemy import text
 
 from bot.config import settings
 from bot.database.engine import get_session
@@ -35,9 +34,6 @@ class BanButtonState(StatesGroup):
 
 class UnbanButtonState(StatesGroup):
     waiting_for_user_id = State()
-
-class BroadcastButtonState(StatesGroup):
-    waiting_for_message = State()
 
 
 # ── 2. GLOBAL CANCEL STEP PROTECTION ──
@@ -206,119 +202,7 @@ async def process_unban_button(message: Message, state: FSMContext, bot: Bot) ->
     await state.clear()
 
 
-# ── 6. BROADCAST MODULE (FIXED & FULLY RELIABLE) ──
-@router.callback_query(F.data.startswith("bc_send:"))
-async def cb_confirm_broadcast(callback: CallbackQuery, state: FSMContext, bot: Bot) -> None:
-    parts = callback.data.split(":")
-    if len(parts) < 3:
-        await callback.answer("❌ Invalid payload parameters.", show_alert=True)
-        return
-
-    from_chat_id = int(parts[1])
-    msg_id = int(parts[2])
-    
-    await state.clear()
-    await callback.answer("🚀 Broadcasting started...")
-    
-    try:
-        await callback.message.edit_reply_markup(reply_markup=None)
-    except Exception:
-        pass
-
-    status_msg = await callback.message.answer("🔄 <i>Broadcasting message payload... Please wait.</i>", parse_mode="HTML")
-
-    async with get_session() as session:
-        result = await session.execute(text("SELECT id FROM users WHERE is_banned = false"))
-        user_ids = [row[0] for row in result.fetchall()]
-
-    if not user_ids:
-        await status_msg.edit_text("❌ No active non-restricted users found in the repository.")
-        return
-
-    success, fail = 0, 0
-    for u_id in user_ids:
-        try:
-            await bot.copy_message(chat_id=int(u_id), from_chat_id=from_chat_id, message_id=msg_id)
-            success += 1
-            await asyncio.sleep(0.05)
-        except TelegramRetryAfter as e:
-            await asyncio.sleep(e.retry_after)
-            try:
-                await bot.copy_message(chat_id=int(u_id), from_chat_id=from_chat_id, message_id=msg_id)
-                success += 1
-            except Exception:
-                fail += 1
-        except Exception:
-            fail += 1
-
-    await status_msg.edit_text(
-        f"📢 <b>Broadcast Completed Successfully!</b>\n\n"
-        f"✅ Delivered to: <b>{success} users</b>\n"
-        f"❌ Failed (Blocked): <b>{fail} users</b>",
-        parse_mode="HTML"
-    )
-
-
-@router.callback_query(F.data == "bc_cancel")
-async def cb_cancel_broadcast(callback: CallbackQuery, state: FSMContext) -> None:
-    await callback.answer("Cancelled")
-    await state.clear()
-    try:
-        await callback.message.edit_text("❌ The transmission broadcast process has been cancelled.")
-    except Exception:
-        await callback.message.answer("❌ The transmission broadcast process has been cancelled.")
-
-
-@router.callback_query(lambda c: c.data and "broadcast" in c.data.lower() and not c.data.startswith("bc_"))
-@router.message(Command("broadcast"))
-async def cb_broadcast_start(event: CallbackQuery | Message, state: FSMContext) -> None:
-    if isinstance(event, CallbackQuery):
-        await event.answer()
-        message = event.message
-    else:
-        message = event
-
-    await message.answer(
-        "📢 <b>Broadcast Message Mode</b>\n\n"
-        "Send the message payload you wish to distribute (Supports Text, Photo, Video, or Document media types). "
-        "A validation preview configuration block will be generated prior to execution.\n\n"
-        "<i>(Type 'cancel' to abort the operation)</i>",
-        parse_mode="HTML",
-        reply_markup=cancel_keyboard()
-    )
-    await state.set_state(BroadcastButtonState.waiting_for_message)
-
-
-@router.message(BroadcastButtonState.waiting_for_message)
-async def process_broadcast_button(message: Message, state: FSMContext) -> None:
-    if message.text and message.text.strip().casefold() == "cancel":
-        await state.clear()
-        await message.answer("❌ Process Cancelled.")
-        return
-
-    # Dynamic inline keyboard payload encoding (chat_id & message_id embedded in callback data)
-    confirm_keyboard = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(text="✅ Confirm & Send", callback_data=f"bc_send:{message.chat.id}:{message.message_id}"),
-                InlineKeyboardButton(text="❌ Cancel", callback_data="bc_cancel")
-            ]
-        ]
-    )
-
-    await message.answer("👇 <b>Here is the structural layout preview of your message:</b>", parse_mode="HTML")
-    await message.send_copy(chat_id=message.chat.id)
-    
-    await message.answer(
-        "☝️ Please verify the preview content above. Do you want to broadcast this asset payload to all active users?",
-        reply_markup=confirm_keyboard,
-        parse_mode="HTML"
-    )
-    # Clear FSM state so the user isn't locked in FSM mode while clicking preview buttons
-    await state.clear()
-
-
-# ── 7. MANUAL ADD FILE LINK ──
+# ── 6. MANUAL ADD FILE LINK ──
 @router.callback_query(lambda c: c.data and "index" in c.data.lower())
 @router.message(Command("add"))
 async def cmd_add_file(event: CallbackQuery | Message, state: FSMContext) -> None:
@@ -419,7 +303,7 @@ async def finalize_index(message: Message, state: FSMContext) -> None:
         await state.clear()
 
 
-# ── 8. CORE UTILITIES ──
+# ── 7. CORE UTILITIES ──
 @router.message(Command("delete"))
 @admin_only
 async def cmd_delete_file(message: Message) -> None:
@@ -456,7 +340,7 @@ async def get_file_hash_by_name(message: Message, command: CommandObject) -> Non
         await message.answer(response_text)
 
 
-# ── 9. STORAGE CHANNEL AUTOMATIC INDEXING ──
+# ── 8. STORAGE CHANNEL AUTOMATIC INDEXING ──
 @router.channel_post()
 async def auto_index_channel_post(message: Message, bot: Bot) -> None:
     tg_file = message.video or message.document or message.audio

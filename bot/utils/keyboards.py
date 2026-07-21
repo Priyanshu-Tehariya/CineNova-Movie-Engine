@@ -2,10 +2,9 @@ from __future__ import annotations
 
 from typing import Sequence
 
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.types import InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-from bot.config import settings
 from bot.database.models import FileRecord
 
 
@@ -44,14 +43,11 @@ def file_delivery_keyboard(
     """Generates control buttons for the delivered movie files."""
     builder = InlineKeyboardBuilder()
     
-    # 📥 Save to Saved Messages Button (Triggers persistent storage handler)
     builder.button(text="📥 Save to Saved Messages", callback_data=f"save_file:{file_hash}")
     
-    # 🔗 Share Link Button (Triggers native Telegram share sheet integration)
     tg_share_link = f"https://t.me/share/url?url=https://t.me/{bot_username}?start={file_hash}&text=Popcorn%20tayyar%20karo!%20Ye%20rahi%20aapki%20movie%20link%20🎬"
     builder.button(text="🔗 Share Link", url=tg_share_link)
     
-    # 🔍 Search Another Button (Redirects to inline chat search bar query)
     builder.button(text="🔍 Search Another", switch_inline_query_current_chat="")
     
     builder.adjust(1)
@@ -65,7 +61,6 @@ def admin_panel_keyboard() -> InlineKeyboardMarkup:
     builder.button(text="📁 Index Files", callback_data="admin:index_mode")
     builder.button(text="🚫 Ban User", callback_data="admin:ban_user")
     builder.button(text="✅ Unban User", callback_data="admin:unban_user")
-    builder.button(text="📢 Broadcast", callback_data="admin_broadcast")
     builder.button(text="🔄 Clear Search Cache", callback_data="admin:clear_cache")
     builder.adjust(2)
     return builder.as_markup()
