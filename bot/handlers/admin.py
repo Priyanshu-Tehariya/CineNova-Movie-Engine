@@ -38,7 +38,7 @@ class UnbanButtonState(StatesGroup):
 
 class BroadcastButtonState(StatesGroup):
     waiting_for_message = State()
-    waiting_for_confirm = State()  # 👈 Added dedicated confirmation state to prevent context loss
+    waiting_for_confirm = State()
 
 
 # ── 2. GLOBAL CANCEL STEP PROTECTION ──
@@ -199,7 +199,7 @@ async def process_unban_button(message: Message, state: FSMContext, bot: Bot) ->
     except Exception:
         pass
 
-    # 4. English professional text broadcast gateway to target user chat
+    # 4. Direct notification to target user chat
     try:
         await bot.send_message(
             chat_id=target_id,
@@ -219,7 +219,7 @@ async def process_unban_button(message: Message, state: FSMContext, bot: Bot) ->
     await state.clear()
 
 
-# ── 6. BROADCAST MODULE WITH MULTI-ROUTING BROAD CATCH & PREVIEW ──
+# ── 6. BROADCAST MODULE WITH EXPLICIT STATE & CALLBACK BINDING ──
 @router.callback_query(lambda c: c.data and "broadcast" in c.data.lower())
 @router.message(Command("broadcast"))
 async def cb_broadcast_start(event: CallbackQuery | Message, state: FSMContext) -> None:
@@ -268,10 +268,12 @@ async def process_broadcast_button(message: Message, state: FSMContext) -> None:
         reply_markup=confirm_keyboard,
         parse_mode="HTML"
     )
-    # Transition to confirmation state so inline buttons handle the next step
+    # Transition to confirmation state
     await state.set_state(BroadcastButtonState.waiting_for_confirm)
 
 
+# Handles confirm button BOTH when state is waiting_for_confirm AND as a fallback
+@router.callback_query(BroadcastButtonState.waiting_for_confirm, F.data == "confirm_broadcast")
 @router.callback_query(F.data == "confirm_broadcast")
 async def cb_confirm_broadcast(callback: CallbackQuery, state: FSMContext, bot: Bot) -> None:
     """Executes asynchronously managed data copying distribution to non-restricted accounts."""
@@ -327,6 +329,7 @@ async def cb_confirm_broadcast(callback: CallbackQuery, state: FSMContext, bot: 
         parse_mode="HTML"
     )
 
+@router.callback_query(BroadcastButtonState.waiting_for_confirm, F.data == "cancel_broadcast")
 @router.callback_query(F.data == "cancel_broadcast")
 async def cb_cancel_broadcast(callback: CallbackQuery, state: FSMContext) -> None:
     """Terminates active broadcast transaction allocations cleanly."""
