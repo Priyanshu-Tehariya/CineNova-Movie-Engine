@@ -38,6 +38,7 @@ class UnbanButtonState(StatesGroup):
 
 class BroadcastButtonState(StatesGroup):
     waiting_for_message = State()
+    waiting_for_confirm = State()  # 👈 Added dedicated confirmation state to prevent context loss
 
 
 # ── 2. GLOBAL CANCEL STEP PROTECTION ──
@@ -247,7 +248,7 @@ async def process_broadcast_button(message: Message, state: FSMContext) -> None:
         await message.answer("❌ Process Cancelled.")
         return
 
-    # Store payload metadata
+    # Safely store message details in FSM memory
     await state.update_data(broadcast_message_id=message.message_id, broadcast_chat_id=message.chat.id)
     
     confirm_keyboard = InlineKeyboardMarkup(
@@ -267,8 +268,8 @@ async def process_broadcast_button(message: Message, state: FSMContext) -> None:
         reply_markup=confirm_keyboard,
         parse_mode="HTML"
     )
-    # UNSET waiting state so callback buttons can execute properly
-    await state.set_state(None)
+    # Transition to confirmation state so inline buttons handle the next step
+    await state.set_state(BroadcastButtonState.waiting_for_confirm)
 
 
 @router.callback_query(F.data == "confirm_broadcast")
@@ -278,7 +279,7 @@ async def cb_confirm_broadcast(callback: CallbackQuery, state: FSMContext, bot: 
     msg_id = data.get("broadcast_message_id")
     from_chat_id = data.get("broadcast_chat_id")
     
-    # Instantly clear state to avoid loop repetition
+    # Clear FSM state immediately to avoid repeated processing
     await state.clear()
 
     if not msg_id or not from_chat_id:
@@ -287,7 +288,7 @@ async def cb_confirm_broadcast(callback: CallbackQuery, state: FSMContext, bot: 
 
     await callback.answer("🚀 Broadcasting started...")
     
-    # Disable buttons to prevent repeated clicks
+    # Remove inline confirmation buttons upon execution
     try:
         await callback.message.edit_reply_markup(reply_markup=None)
     except Exception:
