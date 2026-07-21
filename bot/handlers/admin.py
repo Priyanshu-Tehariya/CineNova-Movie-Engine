@@ -247,7 +247,7 @@ async def process_broadcast_button(message: Message, state: FSMContext) -> None:
         await message.answer("❌ Process Cancelled.")
         return
 
-    # Store message reference and state data safely
+    # Store payload metadata
     await state.update_data(broadcast_message_id=message.message_id, broadcast_chat_id=message.chat.id)
     
     confirm_keyboard = InlineKeyboardMarkup(
@@ -267,6 +267,8 @@ async def process_broadcast_button(message: Message, state: FSMContext) -> None:
         reply_markup=confirm_keyboard,
         parse_mode="HTML"
     )
+    # UNSET waiting state so callback buttons can execute properly
+    await state.set_state(None)
 
 
 @router.callback_query(F.data == "confirm_broadcast")
@@ -276,17 +278,21 @@ async def cb_confirm_broadcast(callback: CallbackQuery, state: FSMContext, bot: 
     msg_id = data.get("broadcast_message_id")
     from_chat_id = data.get("broadcast_chat_id")
     
-    # State clear pehle kar do taaki repeat state loop break ho jaye
+    # Instantly clear state to avoid loop repetition
     await state.clear()
 
     if not msg_id or not from_chat_id:
-        await callback.answer("❌ Context state missing, please restart the transmission sequence.", show_alert=True)
+        await callback.answer("❌ Context state missing, please restart /broadcast.", show_alert=True)
         return
 
     await callback.answer("🚀 Broadcasting started...")
     
-    # Existing keyboard remove kardo taaki repeat click na ho sake
-    await callback.message.edit_reply_markup(reply_markup=None)
+    # Disable buttons to prevent repeated clicks
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+
     status_msg = await callback.message.answer("🔄 <i>Broadcasting message payload... Please wait.</i>", parse_mode="HTML")
 
     async with get_session() as session:
@@ -325,7 +331,10 @@ async def cb_cancel_broadcast(callback: CallbackQuery, state: FSMContext) -> Non
     """Terminates active broadcast transaction allocations cleanly."""
     await callback.answer("Cancelled")
     await state.clear()
-    await callback.message.edit_text("❌ The transmission broadcast process has been cancelled.")
+    try:
+        await callback.message.edit_text("❌ The transmission broadcast process has been cancelled.")
+    except Exception:
+        await callback.message.answer("❌ The transmission broadcast process has been cancelled.")
 
 
 # ── 7. MANUAL ADD FILE LINK (FIXED MULTI-ROUTING WITH CALLBACK) ──
