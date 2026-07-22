@@ -116,38 +116,51 @@ class FileRepository:
     async def full_text_search(
         self, query: str, limit: int = 8
     ) -> list[FileRecord]:
-        """Performs optimized regex-cleaned keyword matching and fallback fuzzy text search matching profiles."""
+        """Performs strict word-boundary query matching to prevent partial substring leaks."""
         query_clean = query.strip().lower()
-        words = [w.strip() for w in re.split(r'[\s\.]+', query_clean) if len(w.strip()) > 1]
+        words = [w.strip() for w in re.split(r'[\s\.]+', query_clean) if len(w.strip()) > 0]
         query_years = [w for w in words if w.isdigit() and len(w) == 4]
 
         if not words:
             return []
 
-        # Filter out common definite articles from primary search keyword evaluation mappings
         important_words = [w for w in words if w != "the"]
         if not important_words:
             important_words = words
 
         conditions = ["is_active = true"]
-        params = {"limit": limit}
+        params = {
+            "limit": limit,
+            "exact_query": query_clean,
+            "start_query": f"{query_clean}%",
+            "word_query": f"% {query_clean}%"
+        }
 
-        # PURE SQL LAYER: Trims out structural bracket metadata patterns directly at the database engine execution phase
+        # Uses Regex Word Boundary (\m and \M) to eliminate substring matches like 'India' or 'Diamond' for 'dia'
         for i, word in enumerate(important_words):
-            conditions.append(f"lower(regexp_replace(replace(title, '.', ' '), '\\[.*?\\]', '', 'g')) LIKE :w_{i}")
-            params[f"w_{i}"] = f"%{word}%"
+            escaped_word = re.escape(word)
+            conditions.append(f"lower(regexp_replace(replace(title, '.', ' '), '\\[.*?\\]', '', 'g')) ~* :regex_{i}")
+            params[f"regex_{i}"] = f"\\m{escaped_word}\\M"
 
-        # Explicit release year extraction logic injection
+        # Explicit release year filter support
         if query_years:
             for j, yr in enumerate(query_years):
                 conditions.append(f"lower(title) LIKE :yr_{j}")
                 params[f"yr_{j}"] = f"%{yr}%"
 
+        # SQL Query with strict matching and priority sorting
         like_sql = text(
             f"""
             SELECT * FROM file_records 
             WHERE {" AND ".join(conditions)} 
-            ORDER BY download_count DESC 
+            ORDER BY 
+                CASE 
+                    WHEN lower(title) LIKE :exact_query THEN 1
+                    WHEN lower(title) LIKE :start_query THEN 2
+                    WHEN lower(title) LIKE :word_query THEN 3
+                    ELSE 4
+                END ASC,
+                download_count DESC 
             LIMIT :limit
             """
         )
@@ -158,12 +171,12 @@ class FileRepository:
         if rows:
             return [FileRecord(**dict(row._mapping)) for row in rows]
 
-        # FALLBACK FUZZY DATABASE LOOKUP LAYER
+        # FALLBACK FUZZY DATABASE LOOKUP (Strictly matching close terms)
         fuzzy_sql = text(
             """
             SELECT * FROM file_records
             WHERE is_active = true
-              AND similarity(lower(regexp_replace(replace(title, '.', ' '), '\\[.*?\\]', '', 'g')), lower(:query)) >= 0.40
+              AND similarity(lower(regexp_replace(replace(title, '.', ' '), '\\[.*?\\]', '', 'g')), lower(:query)) >= 0.50
             ORDER BY similarity(lower(replace(title, '.', ' ')), lower(:query)) DESC
             LIMIT :limit
             """
@@ -179,7 +192,7 @@ class FileRepository:
         return final_fuzzy_results
 
     async def log_request(self, user_id: int, file_hash: str) -> None:
-        """Creates a relational analytic tracking log entries record and updates counter metrics downstream."""
+        """Creates a relational analytic tracking log entry record and updates counter metrics downstream."""
         self._s.add(FileRequest(user_id=user_id, file_hash=file_hash))
         await self.increment_downloads(file_hash)
         await self._s.flush()
@@ -193,9 +206,6 @@ class FileRepository:
 
     async def delete_by_hash(self, file_hash: str) -> None:
         """Permanently purges targeted indexing parameters and associated analytic logs from active database tracking configurations."""
-        from sqlalchemy import delete
-        from bot.database.models import FileRecord, FileRequest
-
         await self._s.execute(
             delete(FileRequest).where(FileRequest.file_hash == file_hash)
         )
