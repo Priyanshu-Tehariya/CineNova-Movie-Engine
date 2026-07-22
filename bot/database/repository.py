@@ -114,11 +114,10 @@ class FileRepository:
         )
 
     async def full_text_search(
-        self, query: str, limit: int = 20
+        self, query: str, limit: int = 25
     ) -> list[FileRecord]:
-        """Performs strict word-boundary and normalized query matching to aggregate all available qualities together."""
+        """Performs robust title matching using normalized word boundaries and dot-replacement logic."""
         query_clean = query.strip().lower()
-        # Normalizes input string by replacing dots and multiple spaces with a single space
         query_normalized = re.sub(r'[\s\.]+', ' ', query_clean).strip()
         words = [w.strip() for w in query_normalized.split() if len(w.strip()) > 0]
         query_years = [w for w in words if w.isdigit() and len(w) == 4]
@@ -126,45 +125,37 @@ class FileRepository:
         if not words:
             return []
 
-        important_words = [w for w in words if w != "the"]
-        if not important_words:
-            important_words = words
+        important_words = [w for w in words if w != "the"] or words
 
         conditions = ["is_active = true"]
         params = {
             "limit": limit,
-            "exact_query": query_normalized,
-            "start_query": f"{query_normalized}%",
-            "word_query": f"% {query_normalized}%"
+            "exact_query": f"%{query_normalized}%",
         }
 
-        # Normalizes database titles (replaces dots with spaces and strips metadata brackets) for strict word boundary evaluation
+        # Multi-word dot-insensitive regex boundary matching
         for i, word in enumerate(important_words):
             escaped_word = re.escape(word)
             conditions.append(
-                f"lower(regexp_replace(replace(title, '.', ' '), '\\[.*?\\]', '', 'g')) ~* :regex_{i}"
+                f"replace(lower(title), '.', ' ') ~* :regex_{i}"
             )
             params[f"regex_{i}"] = f"\\m{escaped_word}\\M"
 
-        # Explicit release year filter evaluation
+        # Explicit release year extraction logic
         if query_years:
             for j, yr in enumerate(query_years):
                 conditions.append(f"lower(title) LIKE :yr_{j}")
                 params[f"yr_{j}"] = f"%{yr}%"
 
-        # SQL Query with Title Normalization, Priority Ranking, and Expanded Result Limit
         like_sql = text(
             f"""
             SELECT * FROM file_records 
             WHERE {" AND ".join(conditions)} 
             ORDER BY 
                 CASE 
-                    WHEN lower(replace(title, '.', ' ')) LIKE :exact_query THEN 1
-                    WHEN lower(replace(title, '.', ' ')) LIKE :start_query THEN 2
-                    WHEN lower(replace(title, '.', ' ')) LIKE :word_query THEN 3
-                    ELSE 4
+                    WHEN replace(lower(title), '.', ' ') LIKE :exact_query THEN 1
+                    ELSE 2
                 END ASC,
-                download_count DESC,
                 created_at DESC 
             LIMIT :limit
             """
@@ -176,25 +167,25 @@ class FileRepository:
         if rows:
             return [FileRecord(**dict(row._mapping)) for row in rows]
 
-        # FALLBACK FUZZY DATABASE LOOKUP LAYER
-        fuzzy_sql = text(
-            """
+        # FALLBACK SEARCH: Standard ILIKE search for resilient query coverage
+        fallback_conditions = ["is_active = true"]
+        fallback_params = {"limit": limit}
+        for k, word in enumerate(important_words):
+            fallback_conditions.append(f"lower(replace(title, '.', ' ')) LIKE :fb_w_{k}")
+            fallback_params[f"fb_w_{k}"] = f"%{word}%"
+
+        fallback_sql = text(
+            f"""
             SELECT * FROM file_records
-            WHERE is_active = true
-              AND similarity(lower(regexp_replace(replace(title, '.', ' '), '\\[.*?\\]', '', 'g')), lower(:query)) >= 0.40
-            ORDER BY similarity(lower(replace(title, '.', ' ')), lower(:query)) DESC
+            WHERE {" AND ".join(fallback_conditions)}
+            ORDER BY created_at DESC
             LIMIT :limit
             """
         )
-        result = await self._s.execute(fuzzy_sql, {"query": query_normalized, "limit": limit})
+        result = await self._s.execute(fallback_sql, fallback_params)
         rows = result.fetchall()
         
-        final_fuzzy_results = [FileRecord(**dict(row._mapping)) for row in rows] if rows else []
-        
-        if query_years and final_fuzzy_results:
-            return [r for r in final_fuzzy_results if any(yr in r.title for yr in query_years)]
-            
-        return final_fuzzy_results
+        return [FileRecord(**dict(row._mapping)) for row in rows] if rows else []
 
     async def log_request(self, user_id: int, file_hash: str) -> None:
         """Creates a relational analytic tracking log entry record and updates counter metrics downstream."""
