@@ -40,29 +40,34 @@ def _serialize_records(records: list[FileRecord]) -> list[dict]:
 
 async def search_files(query: str) -> list[dict]:
     """Queries the Redis cache layer or executes a full-text database search for matching assets."""
-    if len(query.strip()) < 2:
+    clean_query = query.strip()
+    if len(clean_query) < 2:
         return []
 
-    key = _cache_key(query)
+    key = _cache_key(clean_query)
     cached = await redis_get_json(key)
     if cached is not None:
-        logger.debug("search_cache_hit", query=query, count=len(cached))
+        logger.debug("search_cache_hit", query=clean_query, count=len(cached))
         return cached
 
     try:
         async with get_session() as session:
             repo = FileRepository(session)
-            records = await repo.full_text_search(query=query, limit=settings.MAX_SEARCH_RESULTS)
+            records = await repo.full_text_search(query=clean_query, limit=settings.MAX_SEARCH_RESULTS)
     except Exception as exc:
-        logger.error("search_db_error", query=query, error=str(exc))
+        logger.error("search_db_error", query=clean_query, error=str(exc))
         return []
 
     serialized = _serialize_records(records)
+    
+    # Save results to Redis cache (even empty array for short duration to prevent race conditions)
+    cache_ttl = settings.SEARCH_CACHE_TTL if serialized else 10
+    await redis_set_json(key, serialized, cache_ttl)
+    
     if serialized:
-        await redis_set_json(key, serialized, settings.SEARCH_CACHE_TTL)
-        logger.info("search_completed", query=query, count=len(serialized))
+        logger.info("search_completed", query=clean_query, count=len(serialized))
     else:
-        logger.info("search_no_results", query=query)
+        logger.info("search_no_results", query=clean_query)
 
     return serialized
 

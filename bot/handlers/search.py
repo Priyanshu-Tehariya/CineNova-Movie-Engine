@@ -77,7 +77,7 @@ async def text_search(message: Message) -> None:
     results = await search_files(query)
 
     # Activate auto-correction engine if no exact results found
-    if not results:
+    if not results or len(results) == 0:
         suggestions = await get_closest_suggestions(query)
         
         if suggestions:
@@ -98,6 +98,7 @@ async def text_search(message: Message) -> None:
             )
         return
 
+    # Process and build results keyboard if results exist
     class _Stub:
         def __init__(self, d: dict):
             self.__dict__.update(d)
