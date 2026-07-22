@@ -116,11 +116,10 @@ class FileRepository:
     async def full_text_search(
         self, query: str, limit: int = 25
     ) -> list[FileRecord]:
-        """Performs robust title matching using normalized word boundaries and dot-replacement logic."""
+        """Performs robust title matching using normalized space & regex word-boundary SQL matching."""
         query_clean = query.strip().lower()
-        query_normalized = re.sub(r'[\s\.]+', ' ', query_clean).strip()
+        query_normalized = re.sub(r'[\s\.\-]+', ' ', query_clean).strip()
         words = [w.strip() for w in query_normalized.split() if len(w.strip()) > 0]
-        query_years = [w for w in words if w.isdigit() and len(w) == 4]
 
         if not words:
             return []
@@ -131,30 +130,27 @@ class FileRepository:
         params = {
             "limit": limit,
             "exact_query": f"%{query_normalized}%",
+            "start_query": f"{query_normalized}%",
         }
 
-        # Multi-word dot-insensitive regex boundary matching
+        # Multi-word regex word boundary matching (\m and \M prevent substring leaks like India for dia)
         for i, word in enumerate(important_words):
             escaped_word = re.escape(word)
             conditions.append(
-                f"replace(lower(title), '.', ' ') ~* :regex_{i}"
+                f"replace(replace(lower(title), '.', ' '), '-', ' ') ~* :rgx_{i}"
             )
-            params[f"regex_{i}"] = f"\\m{escaped_word}\\M"
+            params[f"rgx_{i}"] = f"\\m{escaped_word}\\M"
 
-        # Explicit release year extraction logic
-        if query_years:
-            for j, yr in enumerate(query_years):
-                conditions.append(f"lower(title) LIKE :yr_{j}")
-                params[f"yr_{j}"] = f"%{yr}%"
-
+        # SQL Query with Clean Title Priority Sorting
         like_sql = text(
             f"""
             SELECT * FROM file_records 
             WHERE {" AND ".join(conditions)} 
             ORDER BY 
                 CASE 
-                    WHEN replace(lower(title), '.', ' ') LIKE :exact_query THEN 1
-                    ELSE 2
+                    WHEN replace(replace(lower(title), '.', ' '), '-', ' ') LIKE :start_query THEN 1
+                    WHEN replace(replace(lower(title), '.', ' '), '-', ' ') LIKE :exact_query THEN 2
+                    ELSE 3
                 END ASC,
                 created_at DESC 
             LIMIT :limit
@@ -167,12 +163,15 @@ class FileRepository:
         if rows:
             return [FileRecord(**dict(row._mapping)) for row in rows]
 
-        # FALLBACK SEARCH: Standard ILIKE search for resilient query coverage
+        # FALLBACK LOOKUP: Standard word OR matching if strict conjunction yields no results
         fallback_conditions = ["is_active = true"]
         fallback_params = {"limit": limit}
+        or_conditions = []
         for k, word in enumerate(important_words):
-            fallback_conditions.append(f"lower(replace(title, '.', ' ')) LIKE :fb_w_{k}")
+            or_conditions.append(f"lower(replace(title, '.', ' ')) LIKE :fb_w_{k}")
             fallback_params[f"fb_w_{k}"] = f"%{word}%"
+
+        fallback_conditions.append(f"({' OR '.join(or_conditions)})")
 
         fallback_sql = text(
             f"""
