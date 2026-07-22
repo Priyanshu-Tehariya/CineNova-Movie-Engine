@@ -114,11 +114,13 @@ class FileRepository:
         )
 
     async def full_text_search(
-        self, query: str, limit: int = 8
+        self, query: str, limit: int = 20
     ) -> list[FileRecord]:
-        """Performs strict word-boundary query matching to prevent partial substring leaks."""
+        """Performs strict word-boundary and normalized query matching to aggregate all available qualities together."""
         query_clean = query.strip().lower()
-        words = [w.strip() for w in re.split(r'[\s\.]+', query_clean) if len(w.strip()) > 0]
+        # Normalizes input string by replacing dots and multiple spaces with a single space
+        query_normalized = re.sub(r'[\s\.]+', ' ', query_clean).strip()
+        words = [w.strip() for w in query_normalized.split() if len(w.strip()) > 0]
         query_years = [w for w in words if w.isdigit() and len(w) == 4]
 
         if not words:
@@ -131,36 +133,39 @@ class FileRepository:
         conditions = ["is_active = true"]
         params = {
             "limit": limit,
-            "exact_query": query_clean,
-            "start_query": f"{query_clean}%",
-            "word_query": f"% {query_clean}%"
+            "exact_query": query_normalized,
+            "start_query": f"{query_normalized}%",
+            "word_query": f"% {query_normalized}%"
         }
 
-        # Uses Regex Word Boundary (\m and \M) to eliminate substring matches like 'India' or 'Diamond' for 'dia'
+        # Normalizes database titles (replaces dots with spaces and strips metadata brackets) for strict word boundary evaluation
         for i, word in enumerate(important_words):
             escaped_word = re.escape(word)
-            conditions.append(f"lower(regexp_replace(replace(title, '.', ' '), '\\[.*?\\]', '', 'g')) ~* :regex_{i}")
+            conditions.append(
+                f"lower(regexp_replace(replace(title, '.', ' '), '\\[.*?\\]', '', 'g')) ~* :regex_{i}"
+            )
             params[f"regex_{i}"] = f"\\m{escaped_word}\\M"
 
-        # Explicit release year filter support
+        # Explicit release year filter evaluation
         if query_years:
             for j, yr in enumerate(query_years):
                 conditions.append(f"lower(title) LIKE :yr_{j}")
                 params[f"yr_{j}"] = f"%{yr}%"
 
-        # SQL Query with strict matching and priority sorting
+        # SQL Query with Title Normalization, Priority Ranking, and Expanded Result Limit
         like_sql = text(
             f"""
             SELECT * FROM file_records 
             WHERE {" AND ".join(conditions)} 
             ORDER BY 
                 CASE 
-                    WHEN lower(title) LIKE :exact_query THEN 1
-                    WHEN lower(title) LIKE :start_query THEN 2
-                    WHEN lower(title) LIKE :word_query THEN 3
+                    WHEN lower(replace(title, '.', ' ')) LIKE :exact_query THEN 1
+                    WHEN lower(replace(title, '.', ' ')) LIKE :start_query THEN 2
+                    WHEN lower(replace(title, '.', ' ')) LIKE :word_query THEN 3
                     ELSE 4
                 END ASC,
-                download_count DESC 
+                download_count DESC,
+                created_at DESC 
             LIMIT :limit
             """
         )
@@ -171,17 +176,17 @@ class FileRepository:
         if rows:
             return [FileRecord(**dict(row._mapping)) for row in rows]
 
-        # FALLBACK FUZZY DATABASE LOOKUP (Strictly matching close terms)
+        # FALLBACK FUZZY DATABASE LOOKUP LAYER
         fuzzy_sql = text(
             """
             SELECT * FROM file_records
             WHERE is_active = true
-              AND similarity(lower(regexp_replace(replace(title, '.', ' '), '\\[.*?\\]', '', 'g')), lower(:query)) >= 0.50
+              AND similarity(lower(regexp_replace(replace(title, '.', ' '), '\\[.*?\\]', '', 'g')), lower(:query)) >= 0.40
             ORDER BY similarity(lower(replace(title, '.', ' ')), lower(:query)) DESC
             LIMIT :limit
             """
         )
-        result = await self._s.execute(fuzzy_sql, {"query": query_clean, "limit": limit})
+        result = await self._s.execute(fuzzy_sql, {"query": query_normalized, "limit": limit})
         rows = result.fetchall()
         
         final_fuzzy_results = [FileRecord(**dict(row._mapping)) for row in rows] if rows else []
