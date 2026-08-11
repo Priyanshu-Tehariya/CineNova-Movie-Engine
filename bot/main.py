@@ -7,7 +7,6 @@ import structlog
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
-from aiogram.exceptions import TelegramNetworkError, TelegramServerError
 from aiogram.fsm.storage.redis import RedisStorage
 
 from bot.cache.redis_client import close_redis, get_redis
@@ -128,26 +127,17 @@ async def on_startup(bot: Bot) -> None:
         logger.critical("database_connection_failed", error=str(exc))
         raise
 
-    # Telegram API Bad Gateway / Network Flicker Retry Loop
-    me = None
-    max_retries = 10
-    for attempt in range(1, max_retries + 1):
-        try:
-            me = await bot.get_me()
-            break
-        except (TelegramServerError, TelegramNetworkError, Exception) as exc:
-            if attempt == max_retries:
-                logger.critical("failed_to_fetch_bot_info_after_max_retries", error=str(exc))
-                raise
-            logger.warning("telegram_api_flicker_retrying", attempt=attempt, error=str(exc))
-            await asyncio.sleep(3)
-
-    logger.info(
-        "bot_started",
-        bot_id=me.id,
-        username=me.username,
-        environment="production",
-    )
+    # Safe non-fatal bot info fetch
+    try:
+        me = await bot.get_me()
+        logger.info(
+            "bot_started",
+            bot_id=me.id,
+            username=me.username,
+            environment="production",
+        )
+    except Exception as exc:
+        logger.warning("telegram_api_slow_starting_polling_directly", error=str(exc))
 
 
 async def on_shutdown(bot: Bot) -> None:
