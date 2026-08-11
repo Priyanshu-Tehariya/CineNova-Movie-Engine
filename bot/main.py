@@ -7,6 +7,7 @@ import structlog
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
+from aiogram.exceptions import TelegramNetworkError, TelegramServerError
 from aiogram.fsm.storage.redis import RedisStorage
 
 from bot.cache.redis_client import close_redis, get_redis
@@ -14,10 +15,10 @@ from bot.config import settings
 from bot.database.engine import engine, get_session
 from bot.database.models import Base
 from bot.handlers import admin, callbacks, search, start
+from bot.middlewares.db_middleware import EnsureUserExistsMiddleware
 from bot.middlewares.force_join import ForceJoinMiddleware
 from bot.middlewares.logging_mw import StructuredLoggingMiddleware
 from bot.middlewares.throttling import ThrottlingMiddleware
-from bot.middlewares.db_middleware import EnsureUserExistsMiddleware  # 👈 Added Middleware Import
 
 
 def configure_logging() -> None:
@@ -72,7 +73,6 @@ async def recover_file_sizes_background(bot: Bot) -> None:
             
             for f_rec in corrupted_files:
                 try:
-                    # Enforce anti-flood spacing restrictions across network transmissions
                     await asyncio.sleep(0.3)
                     
                     fallback_admin = settings.ADMIN_IDS[0] if settings.ADMIN_IDS else 7735364198
@@ -118,19 +118,30 @@ async def on_startup(bot: Bot) -> None:
             )
         logger.info("database_connected")
 
-        from bot.database.models import Base
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         logger.info("database_tables_created_successfully")
 
-        # Inject the asynchronous recovery sequence task thread worker pool mapping loop
         asyncio.create_task(recover_file_sizes_background(bot))
 
     except Exception as exc:
         logger.critical("database_connection_failed", error=str(exc))
         raise
 
-    me = await bot.get_me()
+    # Telegram API Bad Gateway / Network Flicker Retry Loop
+    me = None
+    max_retries = 10
+    for attempt in range(1, max_retries + 1):
+        try:
+            me = await bot.get_me()
+            break
+        except (TelegramServerError, TelegramNetworkError, Exception) as exc:
+            if attempt == max_retries:
+                logger.critical("failed_to_fetch_bot_info_after_max_retries", error=str(exc))
+                raise
+            logger.warning("telegram_api_flicker_retrying", attempt=attempt, error=str(exc))
+            await asyncio.sleep(3)
+
     logger.info(
         "bot_started",
         bot_id=me.id,
@@ -140,7 +151,7 @@ async def on_startup(bot: Bot) -> None:
 
 
 async def on_shutdown(bot: Bot) -> None:
-    """Closes all distributed infrastructure connections and connection pools cleanly during teardown."""
+    """Closes all distributed infrastructure connections cleanly during teardown."""
     logger = structlog.get_logger(__name__)
     await close_redis()
     await engine.dispose()
@@ -166,7 +177,7 @@ async def main() -> None:
 
     # Middlewares Pipeline
     dp.update.outer_middleware(StructuredLoggingMiddleware())
-    dp.update.outer_middleware(EnsureUserExistsMiddleware())  # 👈 Added User Auto-Registration Middleware
+    dp.update.outer_middleware(EnsureUserExistsMiddleware())
     
     dp.message.middleware(ThrottlingMiddleware(limit=0.8, max_alerts=3))
 
