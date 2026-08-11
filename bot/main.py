@@ -7,6 +7,7 @@ import structlog
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
+from aiogram.exceptions import TelegramNetworkError, TelegramServerError
 from aiogram.fsm.storage.redis import RedisStorage
 
 from bot.cache.redis_client import close_redis, get_redis
@@ -127,7 +128,7 @@ async def on_startup(bot: Bot) -> None:
         logger.critical("database_connection_failed", error=str(exc))
         raise
 
-    # Safe non-fatal bot info fetch
+    # Safe non-fatal startup fetch
     try:
         me = await bot.get_me()
         logger.info(
@@ -137,7 +138,7 @@ async def on_startup(bot: Bot) -> None:
             environment="production",
         )
     except Exception as exc:
-        logger.warning("telegram_api_slow_starting_polling_directly", error=str(exc))
+        logger.warning("telegram_api_flicker_during_startup", error=str(exc))
 
 
 async def on_shutdown(bot: Bot) -> None:
@@ -180,16 +181,27 @@ async def main() -> None:
     dp.include_router(callbacks.router)
     dp.include_router(search.router)
 
-    logger.info("starting_polling")
+    logger.info("starting_polling_infinite_resilience_loop")
+
+    # Infinite polling resilience loop
     try:
-        await dp.start_polling(
-            bot,
-            allowed_updates=dp.resolve_used_update_types(),
-            drop_pending_updates=True,
-        )
-    except Exception as exc:
-        logger.critical("polling_crashed", error=str(exc))
-        raise
+        while True:
+            try:
+                await dp.start_polling(
+                    bot,
+                    allowed_updates=dp.resolve_used_update_types(),
+                    drop_pending_updates=True,
+                )
+                break
+            except (TelegramServerError, TelegramNetworkError, asyncio.TimeoutError) as exc:
+                logger.warning("telegram_network_drop_reconnecting_in_5s", error=str(exc))
+                await asyncio.sleep(5)
+            except (KeyboardInterrupt, SystemExit, asyncio.CancelledError):
+                logger.info("polling_stopped_by_system_signal")
+                break
+            except Exception as exc:
+                logger.error("unexpected_polling_error_reconnecting_in_5s", error=str(exc))
+                await asyncio.sleep(5)
     finally:
         await bot.session.close()
 
